@@ -3,12 +3,13 @@ const path = require('path');
 const { chromium } = require('playwright');
 const {
   AUTH_STATE_PATH,
-  DIRS,
+  createRunDirs,
   ensureDirs,
   timestamp,
   fileBase,
   sleep,
   createNetworkLogger,
+  installLcpObserver,
   disableCache,
   acceptCookieBanner,
   stabilize,
@@ -74,7 +75,7 @@ async function tryFilter(page, notes) {
   return false;
 }
 
-function skippedSummary(scenario, reason) {
+function skippedSummary(scenario, reason, runDirs) {
   const startedAt = timestamp();
   const base = fileBase(scenario.name, startedAt);
   const summary = summarizeRecords({
@@ -84,20 +85,20 @@ function skippedSummary(scenario, reason) {
     notes: [`Skipped: ${reason}`],
     extra: { skipped: true, skipReason: reason }
   });
-  const paths = writeScenarioArtifacts({ base, records: [], summary, performanceData: { navigation: [], resource: [] } });
+  const paths = writeScenarioArtifacts({ base, records: [], summary, performanceData: { navigation: [], resource: [] }, runDirs });
   return { scenario: scenario.name, skipped: true, paths };
 }
 
-async function runScenario(browser, scenario, hasAuth) {
+async function runScenario(browser, scenario, hasAuth, runDirs) {
   if (scenario.loggedIn && !hasAuth) {
     console.log(`Skipping ${scenario.name}: auth state missing.`);
-    return skippedSummary(scenario, 'auth state missing');
+    return skippedSummary(scenario, 'auth state missing', runDirs);
   }
 
   const startedAt = timestamp();
   const base = fileBase(scenario.name, startedAt);
-  const harPath = path.join(DIRS.raw, `${base}.har`);
-  const screenshotPath = path.join(DIRS.screenshots, `${base}.png`);
+  const harPath = path.join(runDirs.rawPrivateDir, `${base}.har`);
+  const screenshotPath = path.join(runDirs.screenshotsDir, `${base}.png`);
   const notes = [];
   const contextOptions = {
     viewport: { width: 1440, height: 1000 },
@@ -111,9 +112,18 @@ async function runScenario(browser, scenario, hasAuth) {
 
   const context = await browser.newContext(contextOptions);
   const page = await context.newPage();
+  await installLcpObserver(page);
   const logger = createNetworkLogger(page, scenario.name, startedAt);
   let performanceData = { navigation: [], resource: [] };
   let extra = {};
+  let networkIdleReached = true;
+  let screenshotCapturedAtMs = null;
+
+  async function recordStabilize(targetUrl) {
+    const reached = await stabilize(page, targetUrl, notes);
+    networkIdleReached = networkIdleReached && reached;
+    return reached;
+  }
 
   try {
     page.setDefaultTimeout(20000);
@@ -126,19 +136,25 @@ async function runScenario(browser, scenario, hasAuth) {
       notes.push('Warm scenario: HAR may include warm-up pass; JSON/CSV logger resets before measured pass.');
       await page.goto(scenario.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
       if (scenario.cookieAction === 'accept-all') notes.push(`Cookie banner warm pass: ${await acceptCookieBanner(page)}`);
-      await stabilize(page, scenario.url, notes);
+      await recordStabilize(scenario.url);
       logger.reset();
     }
 
     await page.goto(scenario.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
     if (scenario.cookieAction === 'accept-all') notes.push(`Cookie banner: ${await acceptCookieBanner(page)}`);
-    await stabilize(page, scenario.url, notes);
+    await recordStabilize(scenario.url);
 
     if (scenario.kind === 'scroll') {
       const preRecords = logger.records.slice();
       const prePerformanceData = await capturePerformance(page);
-      const preSummary = summarizeRecords({ scenario, records: preRecords, performanceData: prePerformanceData, notes: notes.slice() });
-      const preSummaryPath = path.join(DIRS.summaries, `${base}.pre-scroll.summary.json`);
+      const preSummary = summarizeRecords({
+        scenario,
+        records: preRecords,
+        performanceData: prePerformanceData,
+        notes: notes.slice(),
+        extra: { networkIdleReached }
+      });
+      const preSummaryPath = path.join(runDirs.summariesDir, `${base}.pre-scroll.summary.json`);
       fs.writeFileSync(preSummaryPath, JSON.stringify(preSummary, null, 2));
       notes.push(`Pre-scroll summary saved: ${preSummaryPath}`);
       for (let i = 0; i < 5; i += 1) {
@@ -168,7 +184,7 @@ async function runScenario(browser, scenario, hasAuth) {
       for (const [label, url] of steps) {
         const method = await clickNavOrGoto(page, label, url, notes);
         navResults.push({ label, url, method });
-        await stabilize(page, url, notes);
+        await recordStabilize(url);
       }
       const exploreReturnRequests = logger.records.filter((record) => record.url.includes('/en/explore') || record.url.toLowerCase().includes('reaction') || record.url.toLowerCase().includes('media'));
       extra.spaNavigation = {
@@ -196,6 +212,7 @@ async function runScenario(browser, scenario, hasAuth) {
 
     performanceData = await capturePerformance(page);
     await page.screenshot({ path: screenshotPath, fullPage: true });
+    screenshotCapturedAtMs = logger.elapsedMs();
   } catch (error) {
     notes.push(`Scenario error: ${error.stack || error.message}`);
     try {
@@ -205,6 +222,7 @@ async function runScenario(browser, scenario, hasAuth) {
     }
     try {
       await page.screenshot({ path: screenshotPath, fullPage: true });
+      screenshotCapturedAtMs = logger.elapsedMs();
     } catch (screenshotError) {
       notes.push(`Screenshot failed: ${screenshotError.message}`);
     }
@@ -217,14 +235,23 @@ async function runScenario(browser, scenario, hasAuth) {
     records: logger.records,
     performanceData,
     notes,
-    extra: { ...extra, rawHarPath: harPath, screenshotPath }
+    extra: {
+      ...extra,
+      networkIdleReached,
+      screenshotCapturedAtMs,
+      visualCompleteApproxMs: screenshotCapturedAtMs,
+      rawHarPath: harPath,
+      screenshotPath
+    }
   });
-  const paths = writeScenarioArtifacts({ base, records: logger.records, summary, performanceData });
+  const paths = writeScenarioArtifacts({ base, records: logger.records, summary, performanceData, runDirs });
   return { scenario: scenario.name, skipped: false, paths: { ...paths, harPath, screenshotPath } };
 }
 
 (async () => {
   ensureDirs();
+  const runDirs = createRunDirs();
+  console.log(`Created run folder: ${runDirs.runDir}`);
   const hasAuth = fs.existsSync(AUTH_STATE_PATH);
   if (!hasAuth) {
     console.log('private/auth-state.json not found. Logged-in scenarios will be skipped.');
@@ -235,7 +262,7 @@ async function runScenario(browser, scenario, hasAuth) {
   try {
     for (const scenario of scenarios) {
       console.log(`\nRunning ${scenario.name}`);
-      const result = await runScenario(browser, scenario, hasAuth);
+      const result = await runScenario(browser, scenario, hasAuth, runDirs);
       outputs.push(result);
     }
   } finally {
@@ -243,6 +270,7 @@ async function runScenario(browser, scenario, hasAuth) {
   }
 
   console.log('\nCollection complete. Output paths:');
+  console.log(`Run folder: ${runDirs.runDir}`);
   for (const output of outputs) {
     console.log(`- ${output.scenario}${output.skipped ? ' (skipped)' : ''}`);
     for (const value of Object.values(output.paths || {})) {

@@ -13,12 +13,18 @@ private/*.zip
 # Raw generated logs and sensitive outputs
 results/raw/
 results/raw/**
+results/*/raw-private/
+results/*/raw-private/**
 results/**/*.har
 results/**/*.trace
 results/**/*.zip
 results/**/*.log
 
 # Generated reports/data that may contain sensitive request information
+results/[0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9]/
+results/[0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9]/**
+results/[0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9]_[0-9]*/
+results/[0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][0-9]_[0-9]*/**
 results/summaries/
 results/summaries/**
 results/screenshots/
@@ -49,16 +55,7 @@ build/
 
 # Keep safe placeholder folders in the public repo
 !results/
-!results/raw/
-!results/raw/.gitkeep
-!results/redacted/
-!results/redacted/.gitkeep
-!results/screenshots/
-!results/screenshots/.gitkeep
-!results/summaries/
-!results/summaries/.gitkeep
-!results/reports/
-!results/reports/.gitkeep
+!results/.gitkeep
 !private/
 !private/.gitkeep
 !private/README_DO_NOT_SHARE.md

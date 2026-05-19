@@ -61,7 +61,13 @@ Do not share this file. It may contain session cookies, localStorage, Clerk sess
 npm run collect
 ```
 
-This runs automatic logged-out and logged-in scenarios. If `private/auth-state.json` is missing, logged-in scenarios are skipped and recorded as skipped.
+This runs automatic logged-out and logged-in scenarios. Each collection creates a timestamped run folder under `results/`, such as:
+
+```text
+results/260519_1500/
+```
+
+If `private/auth-state.json` is missing, logged-in scenarios are skipped and recorded as skipped.
 
 ## Step 3: Run Manual Collection
 
@@ -77,10 +83,22 @@ Use this for SPA navigation, filters, scrolling, or any UI sequence where automa
 npm run redact
 ```
 
-This creates redacted HAR files in:
+By default this redacts the latest run folder. To redact a specific run:
+
+```bash
+npm run redact -- 260519_1500
+```
+
+This reads raw HAR files from:
 
 ```text
-results/redacted/
+results/<run>/raw-private/
+```
+
+and writes redacted HAR files to:
+
+```text
+results/<run>/redacted-har/
 ```
 
 The redactor removes cookies, Authorization headers, Clerk headers, sensitive query values, request post bodies, response content text, and cookie arrays.
@@ -91,10 +109,34 @@ The redactor removes cookies, Authorization headers, Clerk headers, sensitive qu
 npm run report
 ```
 
+By default this reports on the latest run folder. To report on a specific run:
+
+```bash
+npm run report -- 260519_1500
+```
+
 The final markdown report is written to:
 
 ```text
-results/reports/craisee-performance-report.md
+results/<run>/report/craisee-performance-report.md
+```
+
+## Step 6: Package Shareable Files
+
+```bash
+npm run package
+```
+
+By default this packages the latest run folder. To package a specific run:
+
+```bash
+npm run package -- 260519_1500
+```
+
+The zip is written to:
+
+```text
+results/<run>/craisee-performance-package-<run>.zip
 ```
 
 ## NPM Scripts
@@ -105,24 +147,28 @@ results/reports/craisee-performance-report.md
 - `npm run collect:manual`: runs headed manual logging mode
 - `npm run redact`: creates redacted HAR files from raw HAR files
 - `npm run report`: generates a markdown report from scenario summaries
+- `npm run package`: creates a shareable zip without `raw-private/`
 
 ## Output Locations
 
-- Raw HAR files: `results/raw/`
-- Redacted HAR files: `results/redacted/`
-- Screenshots: `results/screenshots/`
-- JSON and CSV summaries: `results/summaries/`
-- Markdown report: `results/reports/`
+- Run folder: `results/<YYMMDD_HHMM>/`
+- Raw/private files: `results/<run>/raw-private/`
+- Redacted HAR files: `results/<run>/redacted-har/`
+- Screenshots: `results/<run>/screenshots/`
+- JSON and CSV summaries: `results/<run>/summaries/`
+- Markdown report: `results/<run>/report/`
 
-These folders are present in the repository through `.gitkeep` placeholders, but generated files inside them are ignored by default.
+Generated run folders are ignored by default.
 
 ## Safe To Share After Review
 
-- `results/reports/craisee-performance-report.md`
-- `results/redacted/*.redacted.har`
-- `results/summaries/*.json`
-- `results/summaries/*.csv`
-- `results/screenshots/*.png`
+- `results/<run>/craisee-performance-package-<run>.zip`
+- `results/<run>/report/craisee-performance-report.md`
+- `results/<run>/redacted-har/*.redacted.har`
+- `results/<run>/summaries/*.summary.json`
+- `results/<run>/summaries/*.request-summary.csv`
+- `results/<run>/summaries/*.performance-entries.json`
+- `results/<run>/screenshots/*.png`
 
 Screenshots and summaries can still reveal private information depending on the logged-in account and page content. Review them before sharing.
 
@@ -132,6 +178,7 @@ Screenshots and summaries can still reveal private information depending on the 
 - `private/*.json`
 - raw logged-in HAR files
 - raw traces
+- `results/<run>/raw-private/`
 - cookies, tokens, Clerk session data, Authorization headers, or post bodies
 - `node_modules/`
 
@@ -143,5 +190,5 @@ Before committing, check what git would include:
 
 ```bash
 git status --short
-git check-ignore -v private/auth-state.json results/raw/example.har results/summaries/example.summary.json
+git check-ignore -v private/auth-state.json results/260519_1500/raw-private/example.har results/260519_1500/summaries/example.summary.json
 ```

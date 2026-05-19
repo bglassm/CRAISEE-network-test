@@ -10,7 +10,8 @@
     "collect": "node scripts/collect-performance.js",
     "collect:manual": "node scripts/collect-manual.js",
     "redact": "node scripts/redact-har.js",
-    "report": "node scripts/generate-report.js"
+    "report": "node scripts/generate-report.js",
+    "package": "node scripts/package-shareable.js"
   },
   "dependencies": {
     "playwright": "^1.54.0"

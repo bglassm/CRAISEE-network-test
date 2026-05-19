@@ -3,12 +3,14 @@ const path = require('path');
 const { chromium } = require('playwright');
 const {
   AUTH_STATE_PATH,
-  DIRS,
+  createRunDirs,
   ensureDirs,
+  latestRunDirs,
   timestamp,
   fileBase,
   prompt,
   createNetworkLogger,
+  installLcpObserver,
   stabilize,
   capturePerformance,
   summarizeRecords,
@@ -21,6 +23,18 @@ function yes(value) {
 
 (async () => {
   ensureDirs();
+  const latestRun = latestRunDirs();
+  let runDirs = latestRun;
+  if (latestRun) {
+    const answer = await prompt(`Append to latest run folder ${path.basename(latestRun.runDir)}? (Y/n): `);
+    if (/^(n|no)$/i.test(answer.trim())) {
+      runDirs = createRunDirs();
+    }
+  } else {
+    runDirs = createRunDirs();
+  }
+  console.log(`Using run folder: ${runDirs.runDir}`);
+
   const hasAuth = fs.existsSync(AUTH_STATE_PATH);
   const useAuthAnswer = hasAuth
     ? await prompt('Use logged-in state from private/auth-state.json? (y/N): ')
@@ -39,8 +53,8 @@ function yes(value) {
 
   const startedAt = timestamp();
   const base = fileBase(scenario.name, startedAt);
-  const harPath = path.join(DIRS.raw, `${base}.har`);
-  const screenshotPath = path.join(DIRS.screenshots, `${base}.png`);
+  const harPath = path.join(runDirs.rawPrivateDir, `${base}.har`);
+  const screenshotPath = path.join(runDirs.screenshotsDir, `${base}.png`);
   const notes = ['Manual logging scenario'];
 
   const browser = await chromium.launch({ headless: false });
@@ -54,8 +68,11 @@ function yes(value) {
     }
   });
   const page = await context.newPage();
+  await installLcpObserver(page);
   const logger = createNetworkLogger(page, scenario.name, startedAt);
   let performanceData = { navigation: [], resource: [] };
+  let networkIdleReached = true;
+  let screenshotCapturedAtMs = null;
 
   try {
     console.log('\nOpening browser for manual logging.');
@@ -63,11 +80,12 @@ function yes(value) {
     console.log('When done, return to terminal and press Enter.\n');
 
     await page.goto(scenario.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
-    await stabilize(page, scenario.url, notes);
+    networkIdleReached = await stabilize(page, scenario.url, notes);
     await prompt('Press Enter when manual actions are complete...');
 
     performanceData = await capturePerformance(page);
     await page.screenshot({ path: screenshotPath, fullPage: true });
+    screenshotCapturedAtMs = logger.elapsedMs();
   } catch (error) {
     notes.push(`Manual scenario error: ${error.stack || error.message}`);
     try {
@@ -77,6 +95,7 @@ function yes(value) {
     }
     try {
       await page.screenshot({ path: screenshotPath, fullPage: true });
+      screenshotCapturedAtMs = logger.elapsedMs();
     } catch (screenshotError) {
       notes.push(`Screenshot failed: ${screenshotError.message}`);
     }
@@ -90,9 +109,15 @@ function yes(value) {
     records: logger.records,
     performanceData,
     notes,
-    extra: { rawHarPath: harPath, screenshotPath }
+    extra: {
+      networkIdleReached,
+      screenshotCapturedAtMs,
+      visualCompleteApproxMs: screenshotCapturedAtMs,
+      rawHarPath: harPath,
+      screenshotPath
+    }
   });
-  const paths = writeScenarioArtifacts({ base, records: logger.records, summary, performanceData });
+  const paths = writeScenarioArtifacts({ base, records: logger.records, summary, performanceData, runDirs });
 
   console.log('\nManual collection complete. Output paths:');
   console.log(`HAR: ${harPath}`);

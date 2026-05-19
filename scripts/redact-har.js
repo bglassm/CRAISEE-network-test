@@ -1,8 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const {
-  DIRS,
-  ensureDirs
+  ensureDirs,
+  resolveRunDirs
 } = require('./common');
 
 const SENSITIVE_QUERY = /token|session|auth|jwt|code/i;
@@ -110,23 +110,25 @@ function redactHar(har, sourceFile) {
 
 (async () => {
   ensureDirs();
-  const files = fs.readdirSync(DIRS.raw)
+  const runDirs = resolveRunDirs(process.argv[2]);
+  const files = fs.readdirSync(runDirs.rawPrivateDir)
     .filter((file) => file.endsWith('.har'))
-    .map((file) => path.join(DIRS.raw, file));
+    .map((file) => path.join(runDirs.rawPrivateDir, file));
 
   const log = [];
   for (const file of files) {
     const har = JSON.parse(fs.readFileSync(file, 'utf8'));
     const { har: redacted, stats } = redactHar(har, path.basename(file));
-    const outPath = path.join(DIRS.redacted, `${path.basename(file, '.har')}.redacted.har`);
+    const outPath = path.join(runDirs.redactedHarDir, `${path.basename(file, '.har')}.redacted.har`);
     fs.writeFileSync(outPath, JSON.stringify(redacted, null, 2));
     stats.output = outPath;
     log.push(stats);
     console.log(`Redacted ${file} -> ${outPath}`);
   }
 
-  const logPath = path.join(DIRS.redacted, 'redaction-log.json');
+  const logPath = path.join(runDirs.rawPrivateDir, 'redaction-log.json');
   fs.writeFileSync(logPath, JSON.stringify({ createdAt: new Date().toISOString(), files: log }, null, 2));
+  console.log(`Run folder: ${runDirs.runDir}`);
   console.log(`Redaction log: ${logPath}`);
 })().catch((error) => {
   console.error(error);

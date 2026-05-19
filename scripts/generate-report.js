@@ -2,18 +2,63 @@ const fs = require('fs');
 const path = require('path');
 const { chromium } = require('playwright');
 const {
-  DIRS,
-  ensureDirs
+  ensureDirs,
+  resolveRunDirs
 } = require('./common');
 
-function readSummaries() {
-  return fs.readdirSync(DIRS.summaries)
+function readSummaries(runDirs) {
+  return fs.readdirSync(runDirs.summariesDir)
     .filter((file) => file.endsWith('.summary.json'))
     .map((file) => {
-      const fullPath = path.join(DIRS.summaries, file);
-      return { file, fullPath, data: JSON.parse(fs.readFileSync(fullPath, 'utf8')) };
+      const fullPath = path.join(runDirs.summariesDir, file);
+      const data = JSON.parse(fs.readFileSync(fullPath, 'utf8'));
+      const performancePath = path.join(runDirs.summariesDir, file.replace(/\.summary\.json$/, '.performance-entries.json'));
+      if (fs.existsSync(performancePath)) {
+        enrichTimingFromPerformanceEntries(data, JSON.parse(fs.readFileSync(performancePath, 'utf8')));
+      }
+      return { file, fullPath, data };
     })
     .sort((a, b) => String(a.data.scenario).localeCompare(String(b.data.scenario)));
+}
+
+function timingDelta(end, start) {
+  if (!Number.isFinite(Number(end)) || !Number.isFinite(Number(start))) return null;
+  const delta = Number(end) - Number(start);
+  return delta >= 0 ? delta : null;
+}
+
+function firstNumber(...values) {
+  for (const value of values) {
+    if (Number.isFinite(Number(value)) && Number(value) > 0) return Number(value);
+  }
+  return null;
+}
+
+function enrichTimingFromPerformanceEntries(data, performanceData) {
+  const nav = performanceData.navigation && performanceData.navigation[0] ? performanceData.navigation[0] : {};
+  const paintEntries = Array.isArray(performanceData.paint) ? performanceData.paint : [];
+  const fcp = paintEntries.find((entry) => entry.name === 'first-contentful-paint');
+  if (data.documentTTFBFromRequestStartMs === undefined) {
+    data.documentTTFBFromRequestStartMs = timingDelta(nav.responseStart, nav.requestStart);
+  }
+  if (data.documentTTFBFromNavigationStartMs === undefined) {
+    data.documentTTFBFromNavigationStartMs = firstNumber(timingDelta(nav.responseStart, nav.startTime || 0), data.documentTtfb);
+  }
+  if (data.domContentLoadedMs === undefined) {
+    data.domContentLoadedMs = firstNumber(timingDelta(nav.domContentLoadedEventEnd, nav.startTime || 0), data.domContentLoaded);
+  }
+  if (data.loadEventMs === undefined) {
+    data.loadEventMs = firstNumber(timingDelta(nav.loadEventEnd, nav.startTime || 0), data.loadEventTiming);
+  }
+  if (data.lastRequestEndMs === undefined) {
+    data.lastRequestEndMs = firstNumber(data.finishTimeLastRequestEndOffset);
+  }
+  if (data.firstContentfulPaintMs === undefined) {
+    data.firstContentfulPaintMs = fcp ? fcp.startTime : null;
+  }
+  if (data.largestContentfulPaintMs === undefined) {
+    data.largestContentfulPaintMs = performanceData.largestContentfulPaint?.startTime || null;
+  }
 }
 
 function num(value) {
@@ -22,6 +67,12 @@ function num(value) {
 
 function fmt(value) {
   if (value === null || value === undefined || value === '') return '';
+  if (Number.isFinite(Number(value))) return String(Math.round(Number(value)));
+  return String(value);
+}
+
+function fmtMs(value) {
+  if (value === null || value === undefined || value === '') return 'n/a';
   if (Number.isFinite(Number(value))) return String(Math.round(Number(value)));
   return String(value);
 }
@@ -82,7 +133,8 @@ async function browserVersion() {
 
 (async () => {
   ensureDirs();
-  const summaries = readSummaries();
+  const runDirs = resolveRunDirs(process.argv[2]);
+  const summaries = readSummaries(runDirs);
   const facts = evidence(summaries);
   const version = await browserVersion();
   const generatedAt = new Date().toISOString();
@@ -100,9 +152,14 @@ async function browserVersion() {
     mb(data.jsBytes),
     mb(data.imageBytes),
     mb(data.totalEncodedDataLength),
-    fmt(data.domContentLoaded),
-    fmt(data.loadEventTiming),
-    fmt(data.finishTimeLastRequestEndOffset)
+    fmtMs(data.documentTTFBFromRequestStartMs),
+    fmtMs(data.documentTTFBFromNavigationStartMs ?? data.documentTtfb),
+    fmtMs(data.firstContentfulPaintMs),
+    fmtMs(data.largestContentfulPaintMs),
+    fmtMs(data.domContentLoadedMs ?? data.domContentLoaded),
+    fmtMs(data.loadEventMs ?? data.loadEventTiming),
+    fmtMs(data.lastRequestEndMs ?? data.finishTimeLastRequestEndOffset),
+    fmtMs(data.visualCompleteApproxMs)
   ]);
 
   const slowRows = topRequests(summaries, 'slow').map((item) => [
@@ -169,6 +226,16 @@ Generated: ${generatedAt}
 - Network: local environment, no throttling unless specified
 - Login states tested: logged-out plus logged-in when \`private/auth-state.json\` was present
 
+## Timing Metrics
+
+- TTFB: server/edge/backend first-byte response timing. \`TTFB reqStart\` is \`responseStart - requestStart\`; \`TTFB navStart\` is \`responseStart - navigation.startTime\`.
+- DOMContentLoaded: HTML parsed and DOM ready, but not necessarily visually complete.
+- Load: browser load event, which may not fire reliably or may be delayed when media/API activity continues.
+- Last request: end of the latest captured network request. This is network activity duration, not visual render completion.
+- FCP: first visible content.
+- LCP: largest visible content, closer to perceived loading.
+- Visual approx: screenshot time after the stabilization wait, not a formal Web Vital.
+
 ## Scenario Summary Table
 
 ${table([
@@ -184,9 +251,14 @@ ${table([
   'JS bytes',
   'image bytes',
   'encoded bytes',
+  'TTFB reqStart',
+  'TTFB navStart',
+  'FCP',
+  'LCP',
   'DOMContentLoaded',
   'Load',
-  'Last request'
+  'Last request',
+  'Visual approx'
 ], scenarioRows)}
 
 ## Explore Deep Dive
@@ -234,8 +306,9 @@ ${largeRows.length ? table(['Scenario', 'Status', 'Duration ms', 'Encoded bytes'
 - Defer Clerk/Auth and third-party scripts where possible.
 `;
 
-  const outPath = path.join(DIRS.reports, 'craisee-performance-report.md');
+  const outPath = path.join(runDirs.reportDir, 'craisee-performance-report.md');
   fs.writeFileSync(outPath, report);
+  console.log(`Run folder: ${runDirs.runDir}`);
   console.log(`Report written: ${outPath}`);
 })().catch((error) => {
   console.error(error);
