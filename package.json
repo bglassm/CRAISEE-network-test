@@ -1,0 +1,18 @@
+{
+  "name": "craisee-perf-logger",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local Playwright performance and network logging for CRAISEE.",
+  "type": "commonjs",
+  "scripts": {
+    "setup": "node -e \"console.log('Run: npx playwright install chromium')\"",
+    "save-auth": "node scripts/save-auth-state.js",
+    "collect": "node scripts/collect-performance.js",
+    "collect:manual": "node scripts/collect-manual.js",
+    "redact": "node scripts/redact-har.js",
+    "report": "node scripts/generate-report.js"
+  },
+  "dependencies": {
+    "playwright": "^1.54.0"
+  }
+}

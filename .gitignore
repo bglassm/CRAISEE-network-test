@@ -1,0 +1,64 @@
+node_modules/
+.env
+.env.*
+.DS_Store
+
+# Sensitive auth/session files
+private/auth-state.json
+private/*.json
+private/*.har
+private/*.trace
+private/*.zip
+
+# Raw generated logs and sensitive outputs
+results/raw/
+results/raw/**
+results/**/*.har
+results/**/*.trace
+results/**/*.zip
+results/**/*.log
+
+# Generated reports/data that may contain sensitive request information
+results/summaries/
+results/summaries/**
+results/screenshots/
+results/screenshots/**
+results/reports/
+results/reports/**
+results/redacted/
+results/redacted/**
+
+# Playwright output
+test-results/
+playwright-report/
+playwright/.cache/
+
+# Large media/debug files
+*.mp4
+*.webm
+*.mov
+*.m4v
+*.avi
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+dist/
+build/
+
+# Keep safe placeholder folders in the public repo
+!results/
+!results/raw/
+!results/raw/.gitkeep
+!results/redacted/
+!results/redacted/.gitkeep
+!results/screenshots/
+!results/screenshots/.gitkeep
+!results/summaries/
+!results/summaries/.gitkeep
+!results/reports/
+!results/reports/.gitkeep
+!private/
+!private/.gitkeep
+!private/README_DO_NOT_SHARE.md
